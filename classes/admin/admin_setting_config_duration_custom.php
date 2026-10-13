@@ -124,13 +124,11 @@ class admin_setting_config_duration_custom extends admin_setting_configduration 
     /**
      * Returns duration text+select fields.
      *
-     * @param array $data Must be form 'v'=>xx, 'u'=>xx
-     * @param string $query
+     * @param mixed $data Array in the form 'v'=>xx, 'u'=>xx, or null when unset
+     * @param mixed $query Search query
      * @return string duration text+select fields and wrapping div(s)
      */
-    public function output_html($data, $query = ''): string {
-        global $OUTPUT;
-
+    public function output_html(mixed $data, mixed $query = ''): string {
         $default = $this->get_defaultsetting();
         if (is_number($default)) {
             $defaultinfo = self::get_duration_text($default);
@@ -140,8 +138,7 @@ class admin_setting_config_duration_custom extends admin_setting_configduration 
             $defaultinfo = null;
         }
 
-        $inputid = $this->get_id() . 'v';
-        $units = array_filter(self::get_units(), function ($unit): bool {
+        $units = array_filter(self::get_units(), function (int $unit): bool {
             if (!$this->maxduration) {
                 // No duration limit. All units are valid.
                 return true;
@@ -150,24 +147,13 @@ class admin_setting_config_duration_custom extends admin_setting_configduration 
             return $unit <= $this->maxduration;
         }, ARRAY_FILTER_USE_KEY);
 
-        $defaultunit = $this->defaultunit;
-
-        $context = (object) [
-            'id' => $this->get_id(),
-            'name' => $this->get_full_name(),
-            'value' => $data['v'] ?? '',
-            'readonly' => $this->is_readonly(),
-            'options' => array_map(function ($unit) use ($units, $data, $defaultunit) {
-                return [
-                    'value' => $unit,
-                    'name' => $units[$unit],
-                    'selected' => isset($data) && (($data['v'] == 0 && $unit == $defaultunit) || $unit == $data['u']),
-                ];
-            }, array_keys($units)),
-        ];
-
-        $element = $OUTPUT->render_from_template('core_admin/setting_configduration', $context);
-
-        return format_admin_setting($this, $this->visiblename, $element, $this->description, $inputid, '', $defaultinfo, $query);
+        return unit_setting_output::output_html(
+            $this,
+            $data,
+            $units,
+            $this->defaultunit,
+            $defaultinfo,
+            $query,
+        );
     }
 }

@@ -16,17 +16,15 @@
 
 namespace assignsubmission_s3\task;
 
-use advanced_testcase;
-use assign_submission_plugin;
 use assignsubmission_s3\persistent\assignsubmission_s3;
 use assignsubmission_s3\persistent\assignsubmission_s3_requests;
+use assignsubmission_s3\tests\submission_testcase;
 use Aws\CommandInterface;
 use Aws\MockHandler;
 use Aws\Result;
 use Aws\S3\Exception\S3Exception;
+use context_course;
 use DateTime;
-use mod_assign_generator;
-use mod_assign_test_generator;
 use mod_assign_testable_assign;
 use phpunit_event_sink;
 use stdClass;
@@ -45,10 +43,7 @@ require_once($CFG->dirroot . '/mod/assign/tests/generator.php');
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  * @covers    \assignsubmission_s3\task\object_restore
  */
-final class object_restore_test extends advanced_testcase {
-    // Use the generator helper.
-    use mod_assign_test_generator;
-
+final class object_restore_test extends submission_testcase {
     /**
      * The event sink.
      *
@@ -244,50 +239,22 @@ final class object_restore_test extends advanced_testcase {
     private function create_graded_submission(int $status = assignsubmission_s3::STATUS_REMOTE_STANDARD): stdClass {
         global $DB;
 
-        // Create a course.
-        $course = $this->getDataGenerator()->create_course();
-
-        // Create a user and teacher (for grading).
-        $user = $this->getDataGenerator()->create_user();
-        $this->getDataGenerator()->enrol_user($user->id, $course->id, 'student');
+        $fixture = $this->create_submission_fixture();
+        $course = $fixture->course;
+        $user = $fixture->user;
+        $this->assign = $fixture->assign;
 
         $teacher = $this->getDataGenerator()->create_user();
         $this->getDataGenerator()->enrol_user($teacher->id, $course->id, 'editingteacher');
         $teacherrole = $DB->get_record('role', ['shortname' => 'teacher']);
-        $coursecontext = \context_course::instance($course->id);
+        $coursecontext = context_course::instance($course->id);
         $this->getDataGenerator()->role_assign($teacherrole->id, $teacher->id, $coursecontext->id);
-
-        // phpcs:ignore Squiz.PHP.CommentedOutCode
-        /* @var $assigngenerator mod_assign_generator */
-        $assigngenerator = $this->getDataGenerator()->get_plugin_generator('mod_assign');
-
-        // Create an assign instance and get the course module.
-        $this->assign = $this->create_instance($course);
-
-        // Enable the s3 submission plugin.
-        // phpcs:ignore Squiz.PHP.CommentedOutCode
-        /* @var assign_submission_plugin[] $submissionplugins */
-        $submissionplugins = $this->assign->get_submission_plugins();
-        foreach ($submissionplugins as $plugin) {
-            if ($plugin->get_type() === 's3') {
-                $plugin->enable();
-            } else {
-                $plugin->disable();
-            }
-        }
 
         // Capture the events.
         $this->eventsink = $this->redirectEvents();
 
         // Create a submission to trigger the event.
-        $assigngenerator->create_submission([
-            'cmid' => $this->assign->get_course_module()->id,
-            'userid' => $user->id,
-            's3' => true,
-            'filename' => 'filename.txt',
-            'mimetype' => 'plain/text', // All mimetypes are accepted by default.
-            'filesize' => '40000000', // The default max is 4GB so we set this to 40MB to not trigger errors.
-        ]);
+        $this->create_s3_submission($this->assign, $user);
 
         // Get the assignment we just created.
         $s3submission = assignsubmission_s3::get_record(['usermodified' => $user->id]);

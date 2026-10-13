@@ -20,11 +20,9 @@
  */
 // <reference types="aws-sdk" />
 
-define(['core/notification', 'core/ajax'], function(notification, ajax) {
+define(['core/notification', 'core/ajax', 'core/str'], function(notification, ajax, str) {
 
     let module = {};
-
-    const parts = [];
 
     const concurrency = 6;
 
@@ -34,8 +32,9 @@ define(['core/notification', 'core/ajax'], function(notification, ajax) {
      *
      * @param {number} cmid
      * @param {number} chunkSize
+     * @param {number} maxfiles
      */
-    module.init = function(cmid, chunkSize) {
+    module.init = function(cmid, chunkSize, maxfiles) {
         // Get the various elements and containers.
         const form = document.querySelector('.editsubmissionform form');
         const statement = document.getElementById('id_submissionstatement');
@@ -53,73 +52,131 @@ define(['core/notification', 'core/ajax'], function(notification, ajax) {
             if (file.files.length <= 0) {
                 return;
             }
+            if (file.files.length > maxfiles) {
+                Promise.all([
+                    str.get_string('error', 'core'),
+                    str.get_string('error:maxfiles', 'assignsubmission_s3', maxfiles)
+                ]).then(([title, message]) => notification.alert(title, message))
+                .catch(notification.exception);
+                e.preventDefault();
+                return;
+            }
             if (!statement || (statement && statement.checked)) {
                 e.preventDefault();
                 buttons.classList.add("hidden");
-                const upload = file.files[0];
-                let request = ajax.call([{
-                    methodname: 'assignsubmission_s3_get_multipart_upload',
-                    args: {
-                        cmid: cmid,
-                        filename: upload.name,
-                        mimetype: upload.type,
-                        filesize: upload.size
-                    }
-                }]);
-                request[0].done(async function(result) {
-                    if (result.error) {
-                        notification.alert(
-                            result.error_title,
-                            result.error_msg
-                        );
-                    } else {
-                        fileContainer.classList.add("hidden");
-                        progressContainer.classList.remove("hidden");
-
-                        const queue = [];
-                        const count = result.s3urls.length;
-                        let partNumber = 1;
-
-                        for (const s3url of result.s3urls) {
-                            const p = uploadPart(upload, partNumber, s3url, count, chunkSize);
-                            partNumber++;
-                            queue.push(p);
-
-                            if (queue.length >= concurrency) {
-                                await Promise.race(queue);
-                                queue.splice(0, 1);
-                            }
-                        }
-                        await Promise.all(queue);
-
-                        // Trigger the completion.
-                        let complete = ajax.call([{
-                            methodname: 'assignsubmission_s3_send_multipart_complete',
-                            args: {
-                                filename: upload.name,
-                                mimetype: upload.type,
-                                cmid: cmid,
-                                parts: JSON.stringify(parts),
-                                uploadid: result.uploadid
-                            }
-                        }]);
-                        complete[0].done(function(result) {
-                            if (result.error) {
-                                notification.alert(
-                                    result.error_title,
-                                    result.error_msg
-                                );
-                            } else {
-                                // Fires when upload is complete
-                                file.value = null;
-                                form.submit();
-                            }
-                        });
-                    }
-                }).fail(notification.exception);
+                uploadFiles(Array.from(file.files), cmid, chunkSize, form, file, fileContainer, progressContainer)
+                    .catch(error => {
+                        resetUploadUi(fileContainer, progressContainer);
+                        notification.exception(error);
+                    });
             }
         });
     };
+
+    /**
+     * Restore the submission form UI when an error occurs.
+     *
+     * @param {HTMLElement} fileContainer
+     * @param {HTMLElement} progressContainer
+     */
+    function resetUploadUi(fileContainer, progressContainer) {
+        fileContainer.classList.remove("hidden");
+        progressContainer.classList.add("hidden");
+        const buttons = document.getElementById('fgroup_id_buttonar');
+        if (buttons) {
+            buttons.classList.remove("hidden");
+        }
+    }
+
+    /**
+     * Upload each file sequentially so the server can reserve and enforce file-count slots.
+     *
+     * @param {File[]} files
+     * @param {number} cmid
+     * @param {number} chunkSize
+     * @param {HTMLFormElement} form
+     * @param {HTMLInputElement} fileinput
+     * @param {HTMLElement} fileContainer
+     * @param {HTMLElement} progressContainer
+     * @returns {Promise<void>}
+     */
+    async function uploadFiles(files, cmid, chunkSize, form, fileinput, fileContainer, progressContainer) {
+        const uploadPlans = [];
+
+        fileContainer.classList.add("hidden");
+        progressContainer.classList.remove("hidden");
+        for (const [index, upload] of files.entries()) {
+            const result = await callAjax('assignsubmission_s3_get_multipart_upload', {
+                cmid: cmid,
+                filename: upload.name,
+                mimetype: upload.type,
+                filesize: upload.size,
+                replaceexisting: index === 0
+            });
+            if (result.error) {
+                resetUploadUi(fileContainer, progressContainer);
+                notification.alert(result.error_title, result.error_msg);
+                return;
+            }
+            uploadPlans.push({upload: upload, result: result});
+        }
+
+        percentComplete = 0;
+        const progress = document.getElementById('progress-bar');
+        const progresspercent = document.getElementById('progress-bar-percent');
+        progress.setAttribute('aria-valuenow', percentComplete);
+        progress.style.width = percentComplete + "%";
+        progresspercent.innerText = Math.round(percentComplete) + "%";
+        const completions = [];
+
+        for (const plan of uploadPlans) {
+            const upload = plan.upload;
+            const result = plan.result;
+            const parts = [];
+            const count = result.s3urls.length;
+            let nextpart = 0;
+            const workers = Array.from({length: Math.min(concurrency, count)}, async() => {
+                while (nextpart < count) {
+                    const index = nextpart++;
+                    await uploadPart(upload, index + 1, result.s3urls[index], count, files.length, chunkSize, parts);
+                }
+            });
+            await Promise.all(workers);
+
+            completions.push({
+                fileid: result.fileid,
+                cmid: cmid,
+                parts: JSON.stringify(parts),
+                uploadid: result.uploadid,
+            });
+        }
+
+        for (const args of completions) {
+            const completion = await callAjax('assignsubmission_s3_send_multipart_complete', args);
+            if (completion.error) {
+                resetUploadUi(fileContainer, progressContainer);
+                notification.alert(completion.error_title, completion.error_msg);
+                return;
+            }
+        }
+
+        fileinput.value = '';
+        form.submit();
+    }
+
+    /**
+     * Run one Moodle AJAX request.
+     *
+     * @param {string} methodname
+     * @param {Object} args
+     * @returns {Promise<Object>}
+     */
+    function callAjax(methodname, args) {
+        return new Promise((resolve, reject) => {
+            const request = ajax.call([{methodname: methodname, args: args}])[0];
+            request.done(resolve).fail(reject);
+        });
+    }
 
     /**
      *
@@ -127,10 +184,12 @@ define(['core/notification', 'core/ajax'], function(notification, ajax) {
      * @param {Number} partNumber
      * @param {String} url
      * @param {Number} count
+     * @param {Number} fileCount
      * @param {Number} chunkSize
+     * @param {Array} parts
      * @returns {Promise<void>}
      */
-    async function uploadPart(file, partNumber, url, count, chunkSize) {
+    async function uploadPart(file, partNumber, url, count, fileCount, chunkSize, parts) {
         const start = (partNumber - 1) * chunkSize;
         const end = Math.min(start + chunkSize, file.size);
         const blob = file.slice(start, end);
@@ -138,12 +197,12 @@ define(['core/notification', 'core/ajax'], function(notification, ajax) {
         const progresspercent = document.getElementById('progress-bar-percent');
 
         const xhr = new XMLHttpRequest();
-        await new Promise((resolve) => {
+        await new Promise((resolve, reject) => {
             let previousPercent = 0;
             xhr.upload.addEventListener("progress", (event) => {
                 if (event.lengthComputable) {
                     let difference = ((event.loaded / event.total) * 100) - previousPercent;
-                    percentComplete += (difference / count);
+                    percentComplete = Math.min(100, percentComplete + (difference / count / fileCount));
                     progress.setAttribute('aria-valuenow', percentComplete);
                     progress.style.width = percentComplete + "%";
                     progresspercent.innerText = Math.round(percentComplete) + "%";
@@ -151,7 +210,11 @@ define(['core/notification', 'core/ajax'], function(notification, ajax) {
                 }
             });
             xhr.addEventListener("loadend", () => {
-                resolve(xhr.readyState === 4 && xhr.status === 200);
+                if (xhr.readyState === 4 && xhr.status === 200) {
+                    resolve();
+                } else {
+                    reject(new Error('Unable to upload file part to S3.'));
+                }
             });
 
             xhr.open("PUT", url, true);

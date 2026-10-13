@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
+use assignsubmission_s3\persistent\assignsubmission_s3 as s3_submission;
+
 defined('MOODLE_INTERNAL') || die();
 
 require_once("{$CFG->dirroot}/mod/assign/tests/generator/assignsubmission_subplugin_generator.php");
@@ -38,6 +40,14 @@ class assignsubmission_s3_generator extends assignsubmission_subplugin_generator
      * @param array $data The data received
      */
     public function add_submission_data(stdClass $submission, assign $assign, array $data): void {
+        $currentsubmission = !empty($data['groupid']) ?
+            $assign->get_group_submission($data['userid'], $data['groupid'], false) :
+            $assign->get_user_submission($data['userid'], false);
+        if ($currentsubmission) {
+            foreach (s3_submission::get_records(['submission' => $currentsubmission->id]) as $record) {
+                $record->delete();
+            }
+        }
         assign_submission_s3::create_submission($assign->get_course_module()->id, $data['filename'], $data['mimetype']);
 
         if (array_key_exists('groupid', $data)) {

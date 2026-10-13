@@ -75,6 +75,11 @@ class assignsubmission_s3 extends persistent {
                 'type' => PARAM_INT,
                 'default' => 0,
             ],
+            'fileid' => [
+                'type' => PARAM_INT,
+                'null' => NULL_ALLOWED,
+                'default' => null,
+            ],
             'status' => [
                 'type' => PARAM_INT,
                 'default' => self::STATUS_LOCAL,
@@ -207,9 +212,9 @@ class assignsubmission_s3 extends persistent {
 
     /**
      * After delete method to connect to AWS and remove the file from the bucket
-     * as well as removing teh stub file locally.
+     * as well as removing the stub file locally.
      *
-     * @param $result
+     * @param bool $result Whether the database record was deleted successfully
      * @return void
      */
     public function after_delete($result) {

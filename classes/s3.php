@@ -18,6 +18,7 @@ namespace assignsubmission_s3;
 
 use assign;
 use assignsubmission_s3\event\connection_issue;
+use assignsubmission_s3\submission_settings;
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
 use Aws\MockHandler;
@@ -74,26 +75,14 @@ class s3 {
      * @param ?MockHandler $handler Allows us to pass a mock handler for Unit testing.
      */
     public function __construct(assign $assignment, ?MockHandler $handler = null) {
-        $config = (array) get_config('assignsubmission_s3');
         $this->handler = $handler;
         $this->assignment = $assignment;
-        $instanceconfig = $this->assignment->get_submission_plugin_by_type('s3')->get_config();
-
-        if ($config['forceglobal']) {
-            // Using forceglobal so set args from global config.
-            $this->endpoint = $config['baseurl'];
-            $this->region = $config['region'];
-            $this->bucket = $config['bucket'];
-            $this->keyid = $config['key'];
-            $this->secret = $config['secret'];
-        } else {
-            // Otherwise use the passed instance config where set.
-            $this->endpoint = $instanceconfig['baseurl'] ?? $config['baseurl'];
-            $this->region = $instanceconfig['region'] ?? $config['region'];
-            $this->bucket = $instanceconfig['bucket'] ?? $config['bucket'];
-            $this->keyid = $instanceconfig['key'] ?? $config['key'];
-            $this->secret = $instanceconfig['secret'] ?? $config['secret'];
-        }
+        $credentials = submission_settings::get_credentials($assignment);
+        $this->endpoint = $credentials['baseurl'];
+        $this->region = $credentials['region'];
+        $this->bucket = $credentials['bucket'];
+        $this->keyid = $credentials['key'];
+        $this->secret = $credentials['secret'];
 
         if ($this->is_configured()) {
             // Site been configured, so attempt connection.
@@ -202,7 +191,7 @@ class s3 {
     /**
      * Restore the object from the glacier archive if restore not already in progress.
      *
-     * @param $key
+     * @param string $key S3 object key to restore
      * @return array Status and expiry date (if applicable).
      */
     public function restore_object($key): array {
@@ -257,8 +246,8 @@ class s3 {
      * Create a copy of an existing object.
      * This is mainly used when backing up and restoring an assignment to the same site.
      *
-     * @param $existingkey
-     * @param $newkey
+     * @param string $existingkey S3 object key to copy
+     * @param string $newkey S3 object key for the copy
      * @return void
      */
     public function copy_object($existingkey, $newkey): void {
@@ -350,7 +339,7 @@ class s3 {
             'UploadId' => $uploadid,
             'MultipartUpload' => [
                 'Parts' => $parts,
-            ]
+            ],
         ]);
     }
 

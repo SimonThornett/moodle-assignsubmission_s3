@@ -31,6 +31,12 @@ require_once($CFG->dirroot . '/mod/assign/submission/s3/locallib.php');
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class restore_assignsubmission_s3_subplugin extends restore_subplugin {
+    /** @var array Submissions whose stub files have already been restored. */
+    private array $restoredfiles = [];
+
+    /** @var array File links to restore after Moodle has restored the related files. */
+    private array $pendingfilelinks = [];
+
     /**
      * Returns the paths to be handled by the subplugin at workshop level
      * @return array
@@ -68,12 +74,52 @@ class restore_assignsubmission_s3_subplugin extends restore_subplugin {
             $s3->copy_object($olduuid, $s3submission->get('uuid'));
         }
 
-        $this->add_related_files(
-            'assignsubmission_s3',
-            assign_submission_s3::FILEAREA,
-            'submission',
-            null,
-            $oldsubmissionid,
-        );
+        if (!isset($this->restoredfiles[$oldsubmissionid])) {
+            $this->add_related_files(
+                'assignsubmission_s3',
+                assign_submission_s3::FILEAREA,
+                'submission',
+                null,
+                $oldsubmissionid,
+            );
+            $this->restoredfiles[$oldsubmissionid] = true;
+        }
+
+        $this->pendingfilelinks[] = [
+            'id' => $s3submission->get('id'),
+            'olduuid' => $olduuid,
+        ];
+    }
+
+    /**
+     * Restore persistent mappings after Moodle has restored the related stub files.
+     *
+     * @return void
+     */
+    protected function after_restore_submission(): void {
+        foreach ($this->pendingfilelinks as $link) {
+            $s3submission = new assignsubmission_s3($link['id']);
+            $context = $s3submission->get_assign()->get_context();
+            $files = get_file_storage()->get_area_files(
+                $context->id,
+                assign_submission_s3::FILECOMPONENT,
+                assign_submission_s3::FILEAREA,
+                $s3submission->get('submission'),
+                'id',
+                false,
+            );
+            $matchingfiles = array_filter($files, static function ($file) use ($link, $s3submission): bool {
+                $matchespath = $file->get_filepath() === '/' . $link['olduuid'] . '/';
+                return $matchespath;
+            });
+            if (empty($matchingfiles) && count($files) === 1) {
+                $matchingfiles = $files;
+            }
+            if (count($matchingfiles) === 1) {
+                $file = reset($matchingfiles);
+                $s3submission->set('fileid', $file->get_id());
+                $s3submission->save();
+            }
+        }
     }
 }

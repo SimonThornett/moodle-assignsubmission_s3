@@ -18,6 +18,11 @@ namespace assignsubmission_s3\admin;
 
 use admin_setting;
 
+defined('MOODLE_INTERNAL') || die();
+
+global $CFG;
+require_once($CFG->libdir . '/adminlib.php');
+
 /**
  * Custom admin setting for duration as the core version includes seconds
  * and the minimum for AWS API requests is 1 day.
@@ -73,7 +78,7 @@ class admin_setting_config_size extends admin_setting {
         string $visiblename,
         string $description,
         int $defaultsetting = self::DEFAULT_MAXBYTESVALUE,
-        int $defaultunit = self::DEFAULT_MAXBYTESUNIT
+        int $defaultunit = self::DEFAULT_MAXBYTESUNIT,
     ) {
         $defaultsetting = self::parse_size($defaultsetting * $defaultunit);
         $units = self::get_units();
@@ -92,7 +97,10 @@ class admin_setting_config_size extends admin_setting {
      * @param int $bytes
      * @return array
      */
-    protected static function parse_size(int $bytes): array {
+    public static function parse_size(int $bytes): array {
+        if ($bytes <= 0) {
+            return ['v' => 0, 'u' => self::DEFAULT_MAXBYTESUNIT];
+        }
         $units = array_flip(array_reverse(self::get_units(), true));
 
         foreach ($units as $unit) {
@@ -108,7 +116,7 @@ class admin_setting_config_size extends admin_setting {
      *
      * @return array
      */
-    protected static function get_units(): array {
+    public static function get_units(): array {
         return [
             self::SIZE_UNIT_KILOBYTE => get_string('sizekb'),
             self::SIZE_UNIT_MEGABYTE => get_string('sizemb'),
@@ -124,7 +132,7 @@ class admin_setting_config_size extends admin_setting {
      * @param null|string $emptyvalue The value to use when the duration is empty. If not specified, a "None" value is used.
      * @return string
      */
-    protected static function get_size_text(int $bytes, ?string $emptyvalue = null): string {
+    public static function get_size_text(int $bytes, ?string $emptyvalue = null): string {
         if (empty($bytes)) {
             if ($emptyvalue !== null) {
                 return $emptyvalue;
@@ -143,13 +151,11 @@ class admin_setting_config_size extends admin_setting {
     /**
      * Returns duration text+select fields.
      *
-     * @param array $data Must be form 'v'=>xx, 'u'=>xx
-     * @param string $query
+     * @param mixed $data Array in the form 'v'=>xx, 'u'=>xx, or null when unset
+     * @param mixed $query Search query
      * @return string duration text+select fields and wrapping div(s)
      */
-    public function output_html($data, $query = ''): string {
-        global $OUTPUT;
-
+    public function output_html(mixed $data, mixed $query = ''): string {
         $default = $this->get_defaultsetting();
         if (is_number($default)) {
             $defaultinfo = self::get_size_text($default);
@@ -159,29 +165,14 @@ class admin_setting_config_size extends admin_setting {
             $defaultinfo = null;
         }
 
-        $inputid = $this->get_id() . 'v';
-        $units = self::get_units();
-
-        $defaultunit = $this->defaultunit;
-
-        $context = (object) [
-            'id' => $this->get_id(),
-            'name' => $this->get_full_name(),
-            'value' => $data['v'] ?? '',
-            'readonly' => $this->is_readonly(),
-            'options' => array_map(function ($unit) use ($units, $data, $defaultunit) {
-                return [
-                    'value' => $unit,
-                    'name' => $units[$unit],
-                    'selected' => isset($data) && (($data['v'] == 0 && $unit == $defaultunit) || $unit == $data['u']),
-                ];
-            }, array_keys($units)),
-        ];
-
-        // Use the core duration template as we're using the same layout.
-        $element = $OUTPUT->render_from_template('core_admin/setting_configduration', $context);
-
-        return format_admin_setting($this, $this->visiblename, $element, $this->description, $inputid, '', $defaultinfo, $query);
+        return unit_setting_output::output_html(
+            $this,
+            $data,
+            self::get_units(),
+            $this->defaultunit,
+            $defaultinfo,
+            $query,
+        );
     }
 
     /**

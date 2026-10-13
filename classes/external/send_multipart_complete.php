@@ -23,7 +23,6 @@ require_once($CFG->dirroot . '/mod/assign/locallib.php');
 require_once($CFG->dirroot . '/mod/assign/submission/s3/locallib.php');
 
 use assign;
-use assign_submission_s3;
 use assignsubmission_s3\persistent\assignsubmission_s3;
 use assignsubmission_s3\s3;
 use context_module;
@@ -49,8 +48,7 @@ class send_multipart_complete extends external_api {
     public static function execute_parameters(): external_function_parameters {
         return new external_function_parameters([
             'cmid' => new external_value(PARAM_INT, 'The course module ID'),
-            'filename' => new external_value(PARAM_TEXT, 'The file name'),
-            'mimetype' => new external_value(PARAM_TEXT, 'The file mime type'),
+            'fileid' => new external_value(PARAM_INT, 'The Moodle file ID'),
             'parts' => new external_value(PARAM_TEXT, 'JSON of all processed parts'),
             'uploadid' => new external_value(PARAM_TEXT, 'The Upload ID'),
         ]);
@@ -73,31 +71,29 @@ class send_multipart_complete extends external_api {
      * Execute the webservice call.
      *
      * @param int $cmid
-     * @param string $filename
-     * @param string $mimetype
+     * @param int $fileid
      * @param string $parts
      * @param string $uploadid
      * @return array
      */
     public static function execute(
         int $cmid,
-        string $filename,
-        string $mimetype,
+        int $fileid,
         string $parts,
         string $uploadid,
     ): array {
+        global $USER;
+
         [
             'cmid' => $cmid,
-            'filename' => $filename,
-            'mimetype' => $mimetype,
+            'fileid' => $fileid,
             'parts' => $parts,
             'uploadid' => $uploadid,
         ] = self::validate_parameters(
             self::execute_parameters(),
             [
                 'cmid' => $cmid,
-                'filename' => $filename,
-                'mimetype' => $mimetype,
+                'fileid' => $fileid,
                 'parts' => $parts,
                 'uploadid' => $uploadid,
             ]
@@ -127,13 +123,36 @@ class send_multipart_complete extends external_api {
             ];
         }
 
+        if ($assign->get_instance()->teamsubmission) {
+            $submissionrecord = $assign->get_group_submission($USER->id, 0, false);
+        } else {
+            $submissionrecord = $assign->get_user_submission($USER->id, false);
+        }
+        if (!$submissionrecord) {
+            return [
+                'error' => true,
+                'error_title' => get_string('error'),
+                'error_msg' => get_string('error:request', 'assignsubmission_s3'),
+            ];
+        }
+
+        $s3submission = assignsubmission_s3::get_record([
+            'submission' => $submissionrecord->id,
+            'fileid' => $fileid,
+        ]);
+        if (!$s3submission) {
+            return [
+                'error' => true,
+                'error_title' => get_string('error'),
+                'error_msg' => get_string('error:request', 'assignsubmission_s3'),
+            ];
+        }
+
         $errorstatus = ['error' => false];
 
         try {
-            $submission = assign_submission_s3::create_submission($cmid, $filename, $mimetype);
-
             $s3 = new s3($assign, null);
-            $s3->send_presigned_part_upload_complete_request($uploadid, $submission->get('uuid'), json_decode($parts, true));
+            $s3->send_presigned_part_upload_complete_request($uploadid, $s3submission->get('uuid'), json_decode($parts, true));
         } catch (Exception $e) {
             $errorstatus = [
                 'error' => true,

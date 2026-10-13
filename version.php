@@ -25,6 +25,6 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2025102903;
+$plugin->version   = 2026100803;
 $plugin->requires  = 2024100100;
 $plugin->component = 'assignsubmission_s3';

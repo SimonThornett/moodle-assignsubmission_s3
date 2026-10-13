@@ -15,19 +15,32 @@
     along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 }}
 {{!
-    @template mod_assign/grading_actionmenu
+    @template assignsubmission_s3/form/file
 
-    Actions panel for the assignment grading UI.
+    File input and upload progress for S3 assignment submissions.
 
     Classes required for JS:
-    * none
+    * progress-bar
+    * progress-bar-container
 
     Context variables required for this template:
-    * actions - (optional) HTML that outputs the bulk action menu
+    * accept - (optional) Comma-separated accepted file extensions or MIME types
+    * humansize - Human-readable maximum file size
+    * multiple - Whether multiple files can be selected
+    * maxfiles - Maximum number of files
+    * acceptedtypes - Accepted file types label
+    * maxfilesize - Maximum file size label
+    * maxfileslabel - Maximum number of files label
 
     Example context (json):
     {
-
+        "accept": ".pdf,.txt",
+        "humansize": "4 GB",
+        "multiple": true,
+        "maxfiles": 3,
+        "acceptedtypes": "Accepted file types:",
+        "maxfilesize": "Maximum file size:",
+        "maxfileslabel": "Maximum number of files:"
     }
 
 }}
@@ -39,15 +52,17 @@
     </div>
     <div class="col-md-9 d-flex flex-wrap align-items-start felement" data-fieldtype="filemanager">
         <fieldset class="w-100 m-0 p-0 border-0" id="id_s3_file_fieldset">
-            <input type="file" id="s3_file" name="s3_file" accept="{{{accept}}}" size="{{{size}}}"/>
-            <div>Accepted types: {{{accept}}}</div>
-            <div>Max file size: {{{humansize}}}</div>
+            <input type="file" id="s3_file" name="s3_file"{{#accept}} accept="{{accept}}"{{/accept}}{{#multiple}} multiple{{/multiple}}>
+            <div>{{acceptedtypes}} {{accept}}</div>
+            <div>{{maxfilesize}} {{humansize}}</div>
+            <div>{{maxfileslabel}} {{maxfiles}}</div>
         </fieldset>
     </div>
 </div>
 <div id="progress-bar-container" class="container progress-bar-container hidden pb-3 pt-3">
-    <label id="progress-bar-percent" for="progress-bar">0%</label>
+    <span id="progress-bar-percent">0%</span>
     <div class="progress" style="height: 20px;">
-        <div id="progress-bar" class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+        <div id="progress-bar" class="progress-bar" role="progressbar" aria-labelledby="id_s3_file_label"
+             aria-describedby="progress-bar-percent" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     </div>
 </div>

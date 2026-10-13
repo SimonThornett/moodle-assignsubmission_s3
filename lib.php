@@ -92,9 +92,9 @@ function assignsubmission_s3_pluginfile(
     }
 
     $s3submission = assignsubmission_s3::get_record([
-        'usermodified' => $userid,
         'assignment' => $cm->id,
         'submission' => $itemid,
+        'fileid' => $file->get_id(),
     ]);
 
     if (!$s3submission) {

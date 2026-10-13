@@ -36,9 +36,9 @@ $settings->add(
 
 $settings->add(
     new admin_setting_configcheckbox(
-        'assignsubmission_s3/forceglobal',
-        new lang_string('setting:forceglobal', 'assignsubmission_s3'),
-        new lang_string('setting:forceglobal_help', 'assignsubmission_s3'),
+        'assignsubmission_s3/forceglobalcredentials',
+        new lang_string('setting:forceglobalcredentials', 'assignsubmission_s3'),
+        new lang_string('setting:forceglobalcredentials_help', 'assignsubmission_s3'),
         1,
     )
 );
@@ -125,6 +125,25 @@ $settings->add(
         new lang_string('setting:default', 'assignsubmission_s3'),
         new lang_string('setting:default_help', 'assignsubmission_s3'),
         0,
+    )
+);
+
+$settings->add(
+    new admin_setting_configcheckbox(
+        'assignsubmission_s3/forceglobalsubmission',
+        new lang_string('setting:forceglobalsubmission', 'assignsubmission_s3'),
+        new lang_string('setting:forceglobalsubmission_help', 'assignsubmission_s3'),
+        1,
+    )
+);
+
+$settings->add(
+    new admin_setting_configtext(
+        'assignsubmission_s3/maxfiles',
+        new lang_string('setting:maxfiles', 'assignsubmission_s3'),
+        new lang_string('setting:maxfiles_help', 'assignsubmission_s3'),
+        1,
+        PARAM_INT,
     )
 );
 

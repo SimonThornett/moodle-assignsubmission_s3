@@ -24,6 +24,7 @@ require_once($CFG->dirroot . '/mod/assign/submission/s3/locallib.php');
 
 use assign;
 use assign_submission_s3;
+use assignsubmission_s3\submission_file_limit;
 use context_module;
 use core_external\external_api;
 use core_external\external_function_parameters;
@@ -50,6 +51,7 @@ class get_multipart_upload extends external_api {
             'filename' => new external_value(PARAM_TEXT, 'The file name'),
             'mimetype' => new external_value(PARAM_TEXT, 'The file mime type'),
             'filesize' => new external_value(PARAM_TEXT, 'The file size'),
+            'replaceexisting' => new external_value(PARAM_BOOL, 'Replace all existing submission files'),
         ]);
     }
 
@@ -67,6 +69,7 @@ class get_multipart_upload extends external_api {
                 new external_value(PARAM_URL, 'Pre-signed S3 URLs.', VALUE_OPTIONAL),
             ),
             'uploadid' => new external_value(PARAM_TEXT, 'The generated upload ID', VALUE_OPTIONAL),
+            'fileid' => new external_value(PARAM_INT, 'The Moodle file ID', VALUE_OPTIONAL),
         ]);
     }
 
@@ -77,14 +80,22 @@ class get_multipart_upload extends external_api {
      * @param string $filename
      * @param string $mimetype
      * @param string $filesize
+     * @param bool $replaceexisting Whether to replace all existing submission files
      * @return array
      */
-    public static function execute(int $cmid, string $filename, string $mimetype, string $filesize): array {
+    public static function execute(
+        int $cmid,
+        string $filename,
+        string $mimetype,
+        string $filesize,
+        bool $replaceexisting,
+    ): array {
         [
             'cmid' => $cmid,
             'filename' => $filename,
             'mimetype' => $mimetype,
             'filesize' => $filesize,
+            'replaceexisting' => $replaceexisting,
         ] = self::validate_parameters(
             self::execute_parameters(),
             [
@@ -92,6 +103,7 @@ class get_multipart_upload extends external_api {
                 'filename' => $filename,
                 'mimetype' => $mimetype,
                 'filesize' => $filesize,
+                'replaceexisting' => $replaceexisting,
             ]
         );
 
@@ -108,6 +120,7 @@ class get_multipart_upload extends external_api {
                 'error_msg' => get_string('submissionnotopen', 'assign'),
                 's3urls' => [],
                 'uploadid' => '',
+                'fileid' => 0,
             ];
         }
 
@@ -120,10 +133,11 @@ class get_multipart_upload extends external_api {
                 'error_msg' => get_string('error:pluginnotenabled', 'assignsubmission_s3'),
                 's3urls' => [],
                 'uploadid' => '',
+                'fileid' => 0,
             ];
         }
 
-        $error = assign_submission_s3::validate_submission($filename, $filesize);
+        $error = assign_submission_s3::validate_submission($cmid, $filename, $filesize);
 
         if (!empty($error)) {
             return [
@@ -132,6 +146,23 @@ class get_multipart_upload extends external_api {
                 'error_msg' => $error,
                 's3urls' => [],
                 'uploadid' => '',
+                'fileid' => 0,
+            ];
+        }
+
+        if ($replaceexisting) {
+            submission_file_limit::replace_existing_files($cmid);
+        }
+
+        $error = submission_file_limit::validate($cmid);
+        if (!empty($error)) {
+            return [
+                'error' => true,
+                'error_title' => get_string('error'),
+                'error_msg' => $error,
+                's3urls' => [],
+                'uploadid' => '',
+                'fileid' => 0,
             ];
         }
 
@@ -145,6 +176,7 @@ class get_multipart_upload extends external_api {
             'error_msg' => $error,
             's3urls' => $s3urls,
             'uploadid' => $uploadid,
+            'fileid' => (int) $submission->get('fileid'),
         ];
     }
 }

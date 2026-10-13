@@ -16,15 +16,7 @@
 
 namespace assignsubmission_s3\event;
 
-use advanced_testcase;
-use assign_submission_plugin;
-use mod_assign_generator;
-use mod_assign_test_generator;
-
-defined('MOODLE_INTERNAL') || die();
-
-global $CFG;
-require_once($CFG->dirroot . '/mod/assign/tests/generator.php');
+use assignsubmission_s3\tests\submission_testcase;
 
 /**
  * Submission updated event test.
@@ -35,162 +27,32 @@ require_once($CFG->dirroot . '/mod/assign/tests/generator.php');
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  * @covers    \assignsubmission_s3\event\submission_updated
  */
-final class submission_updated_test extends advanced_testcase {
-    // Use the generator helper.
-    use mod_assign_test_generator;
-
+final class submission_updated_test extends submission_testcase {
+    /**
+     * Replacing an individual upload creates a new S3 record.
+     */
     public function test_trigger_no_group(): void {
-
-        // Initial setup.
         $this->resetAfterTest();
         $this->setAdminUser();
-
-        // Create a course.
-        $course = $this->getDataGenerator()->create_course();
-
-        // Create a user.
-        $user = $this->getDataGenerator()->create_user();
-        $this->getDataGenerator()->enrol_user($user->id, $course->id, 'student');
-
-        // phpcs:ignore Squiz.PHP.CommentedOutCode
-        /* @var $assigngenerator mod_assign_generator */
-        $assigngenerator = $this->getDataGenerator()->get_plugin_generator('mod_assign');
-
-        // Create an assign instance and get the course module.
-        $assign = $this->create_instance($course);
-
-        // Enable the s3 submission plugin.
-        // phpcs:ignore Squiz.PHP.CommentedOutCode
-        /* @var assign_submission_plugin[] $submissionplugins */
-        $submissionplugins = $assign->get_submission_plugins();
-        foreach ($submissionplugins as $plugin) {
-            if ($plugin->get_type() === 's3') {
-                $plugin->enable();
-            } else {
-                $plugin->disable();
-            }
-        }
-
-        // Capture the events.
+        $fixture = $this->create_submission_fixture();
         $sink = $this->redirectEvents();
+        $this->create_s3_submission($fixture->assign, $fixture->user);
+        $this->create_s3_submission($fixture->assign, $fixture->user);
 
-        // Create a submission to trigger the event.
-        $assigngenerator->create_submission([
-            'cmid' => $assign->get_course_module()->id,
-            'userid' => $user->id,
-            's3' => true,
-            'filename' => 'filename.txt',
-            'mimetype' => 'plain/text', // All mimetypes are accepted by default.
-            'filesize' => '40000000', // The default max is 4GB so we set this to 40MB to not trigger errors.
-        ]);
-        // Call it again with the same details to trigger an update.
-        $assigngenerator->create_submission([
-            'cmid' => $assign->get_course_module()->id,
-            'userid' => $user->id,
-            's3' => true,
-            'filename' => 'filename.txt',
-            'mimetype' => 'plain/text', // All mimetypes are accepted by default.
-            'filesize' => '40000000', // The default max is 4GB so we set this to 40MB to not trigger errors.
-        ]);
-
-        $triggeredevents = $sink->get_events();
-
-        // Event 0 should be assessable_uploaded.
-        // Event 1 should be assignsubmission_s3\event\submission_created.
-        // Event 2 should be assessable_uploaded again.
-        // Event 3 should be assignsubmission_s3\event\submission_updated.
-        $this->assertEquals(4, $sink->count());
-
-        $event = $triggeredevents[3];
-        $this->assertInstanceOf('\assignsubmission_s3\event\submission_updated', $event);
-        $this->assertEquals($assign->get_context(), $event->get_context());
-        $this->assertEventContextNotUsed($event);
-        $description = 'The user with id "' .
-            $user->id .
-            '" updated a Large file submission and uploaded a file in the assignment with course module id "' .
-            $assign->get_course_module()->id .
-            '"';
-        $this->assertEquals($description, $event->get_description());
+        // Replacement also emits a file deletion event before creating the new record.
+        $this->assert_submission_created($sink, $fixture, 5);
     }
 
+    /**
+     * Replacing a group upload retains the group in its creation event.
+     */
     public function test_trigger_group(): void {
-
-        // Initial setup.
         $this->resetAfterTest();
         $this->setAdminUser();
-
-        // Create a course.
-        $course = $this->getDataGenerator()->create_course();
-
-        // Create a user.
-        $user = $this->getDataGenerator()->create_user();
-        $this->getDataGenerator()->enrol_user($user->id, $course->id, 'student');
-
-        // Create a group and add the user.
-        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
-        $this->getDataGenerator()->create_group_member(['groupid' => $group->id, 'userid' => $user->id]);
-
-        // phpcs:ignore Squiz.PHP.CommentedOutCode
-        /* @var $assigngenerator mod_assign_generator */
-        $assigngenerator = $this->getDataGenerator()->get_plugin_generator('mod_assign');
-
-        // Create an assign instance and get the course module.
-        $assign = $this->create_instance($course, ['teamsubmission' => true]);
-
-        // Enable the s3 submission plugin.
-        // phpcs:ignore Squiz.PHP.CommentedOutCode
-        /* @var assign_submission_plugin[] $submissionplugins */
-        $submissionplugins = $assign->get_submission_plugins();
-        foreach ($submissionplugins as $plugin) {
-            if ($plugin->get_type() === 's3') {
-                $plugin->enable();
-            } else {
-                $plugin->disable();
-            }
-        }
-
-        // Capture the events.
+        $fixture = $this->create_submission_fixture(['teamsubmission' => true]);
         $sink = $this->redirectEvents();
-
-        // Create a submission to trigger the event.
-        $assigngenerator->create_submission([
-            'cmid' => $assign->get_course_module()->id,
-            'userid' => $user->id,
-            'groupid' => $group->id,
-            's3' => true,
-            'filename' => 'filename.txt',
-            'mimetype' => 'plain/text', // All mimetypes are accepted by default.
-            'filesize' => '40000000', // The default max is 4GB so we set this to 40MB to not trigger errors.
-        ]);
-        // Call it again with the same details to trigger an update.
-        $assigngenerator->create_submission([
-            'cmid' => $assign->get_course_module()->id,
-            'userid' => $user->id,
-            's3' => true,
-            'filename' => 'filename.txt',
-            'mimetype' => 'plain/text', // All mimetypes are accepted by default.
-            'filesize' => '40000000', // The default max is 4GB so we set this to 40MB to not trigger errors.
-        ]);
-
-        $triggeredevents = $sink->get_events();
-
-        // Event 0 should be assessable_uploaded.
-        // Event 1 should be assignsubmission_s3\event\submission_created.
-        // Event 2 should be assessable_uploaded again.
-        // Event 3 should be assignsubmission_s3\event\submission_updated.
-        $this->assertEquals(4, $sink->count());
-
-        $event = $triggeredevents[3];
-        $this->assertInstanceOf('\assignsubmission_s3\event\submission_updated', $event);
-        $this->assertEquals($assign->get_context(), $event->get_context());
-        $this->assertEventContextNotUsed($event);
-        $description = 'The user with id "' .
-            $user->id .
-            '" updated a Large file submission and uploaded a file in the assignment with course module id "' .
-            $assign->get_course_module()->id .
-            '" for the group with id "' .
-            $group->id .
-            '"';
-        $this->assertEquals($description, $event->get_description());
+        $this->create_s3_submission($fixture->assign, $fixture->user, $fixture->group->id);
+        $this->create_s3_submission($fixture->assign, $fixture->user);
+        $this->assert_submission_created($sink, $fixture, 5);
     }
 }

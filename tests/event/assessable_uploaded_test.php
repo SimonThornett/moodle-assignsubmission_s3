@@ -16,15 +16,7 @@
 
 namespace assignsubmission_s3\event;
 
-use advanced_testcase;
-use assign_submission_plugin;
-use mod_assign_generator;
-use mod_assign_test_generator;
-
-defined('MOODLE_INTERNAL') || die();
-
-global $CFG;
-require_once($CFG->dirroot . '/mod/assign/tests/generator.php');
+use assignsubmission_s3\tests\submission_testcase;
 
 /**
  * Submission created event test.
@@ -35,54 +27,25 @@ require_once($CFG->dirroot . '/mod/assign/tests/generator.php');
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  * @covers    \assignsubmission_s3\event\assessable_uploaded
  */
-final class assessable_uploaded_test extends advanced_testcase {
-    // Use the generator helper.
-    use mod_assign_test_generator;
-
+final class assessable_uploaded_test extends submission_testcase {
+    /**
+     * Uploading a file emits an assessable event with the submission ID.
+     */
     public function test_trigger(): void {
 
         // Initial setup.
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        // Create a course.
-        $course = $this->getDataGenerator()->create_course();
-
-        // Create a user.
-        $user = $this->getDataGenerator()->create_user();
-        $this->getDataGenerator()->enrol_user($user->id, $course->id, 'student');
-
-        // phpcs:ignore Squiz.PHP.CommentedOutCode
-        /* @var $assigngenerator mod_assign_generator */
-        $assigngenerator = $this->getDataGenerator()->get_plugin_generator('mod_assign');
-
-        // Create an assign instance and get the course module.
-        $assign = $this->create_instance($course);
-
-        // Enable the s3 submission plugin.
-        // phpcs:ignore Squiz.PHP.CommentedOutCode
-        /* @var assign_submission_plugin[] $submissionplugins */
-        $submissionplugins = $assign->get_submission_plugins();
-        foreach ($submissionplugins as $plugin) {
-            if ($plugin->get_type() === 's3') {
-                $plugin->enable();
-            } else {
-                $plugin->disable();
-            }
-        }
+        $fixture = $this->create_submission_fixture();
+        $assign = $fixture->assign;
+        $user = $fixture->user;
 
         // Capture the events.
         $sink = $this->redirectEvents();
 
         // Create a submission to trigger the event.
-        $assigngenerator->create_submission([
-            'cmid' => $assign->get_course_module()->id,
-            'userid' => $user->id,
-            's3' => true,
-            'filename' => 'filename.txt',
-            'mimetype' => 'plain/text', // All mimetypes are accepted by default.
-            'filesize' => '40000000', // The default max is 4GB so we set this to 40MB to not trigger errors.
-        ]);
+        $this->create_s3_submission($assign, $user);
 
         $triggeredevents = $sink->get_events();
 
@@ -91,7 +54,7 @@ final class assessable_uploaded_test extends advanced_testcase {
         $this->assertEquals(2, $sink->count());
 
         $event = $triggeredevents[0];
-        $this->assertInstanceOf('\assignsubmission_s3\event\assessable_uploaded', $event);
+        $this->assertInstanceOf(assessable_uploaded::class, $event);
         $this->assertEquals($assign->get_context(), $event->get_context());
         $this->assertEventContextNotUsed($event);
         $description = 'The user with id "' .
