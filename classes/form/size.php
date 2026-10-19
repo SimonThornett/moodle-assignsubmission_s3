@@ -188,11 +188,38 @@ class size extends MoodleQuickForm_group {
      */
     #[\Override]
     public function validatesubmitvalue($values): ?string {
+        if ($this->has_enabled_checkbox() && empty($this->_mform->getSubmitValue('assignsubmission_s3_enabled'))) {
+            return null;
+        }
+
         $bytes = $this->exportvalue($values);
         if ($bytes === null || $bytes <= 0) {
             return get_string('err_positiveint', 'core_form');
         }
         return null;
+    }
+
+    /**
+     * Check for the plugin checkbox, including the assignment's submission types group.
+     *
+     * @return bool Whether the form contains the plugin checkbox.
+     */
+    private function has_enabled_checkbox(): bool {
+        if (!$this->_mform) {
+            return false;
+        }
+        $enabledname = 'assignsubmission_s3_enabled';
+        if ($this->_mform->elementExists($enabledname)) {
+            return true;
+        }
+        if ($this->_mform->elementExists('submissionplugins')) {
+            foreach ($this->_mform->getElement('submissionplugins')->getElements() as $element) {
+                if ($element->getName() === $enabledname) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

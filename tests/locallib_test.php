@@ -493,11 +493,25 @@ final class locallib_test extends advanced_testcase {
                 'unit' => admin_setting_config_size::SIZE_UNIT_GIGABYTE,
             ],
         ];
+        $form->_submitValues['assignsubmission_s3_enabled'] = 1;
         $this->assertSame(
             get_string('err_positiveint', 'core_form'),
             $sizeelement->validateSubmitValue($invalidvalues),
         );
-
+        $form->_submitValues['assignsubmission_s3_enabled'] = 0;
+        $this->assertNull($sizeelement->validateSubmitValue($invalidvalues));
+        $emptyvalues = [
+            'assignsubmission_s3_maxsize' => [
+                'number' => '',
+                'unit' => admin_setting_config_size::SIZE_UNIT_GIGABYTE,
+            ],
+        ];
+        $this->assertNull($sizeelement->validateSubmitValue($emptyvalues));
+        $form->_submitValues['assignsubmission_s3_enabled'] = 1;
+        $this->assertSame(
+            get_string('err_positiveint', 'core_form'),
+            $sizeelement->validateSubmitValue($emptyvalues),
+        );
         $formdata = (object) [
             'assignsubmission_s3_maxfiles' => 5,
             'assignsubmission_s3_maxsize' => [
@@ -516,5 +530,44 @@ final class locallib_test extends advanced_testcase {
         ];
         $this->assertTrue($plugin->save_settings($directdata));
         $this->assertSame(1048576, (int) $plugin->get_config('maxsize'));
+    }
+
+    /**
+     * Grouped submission checkboxes control size validation without weakening standalone elements.
+     */
+    public function test_size_validation_with_grouped_checkbox(): void {
+        $this->resetAfterTest();
+        size::register();
+        $form = new MoodleQuickForm('groupedsizesettings', 'post', '');
+        $form->addGroup(
+            [$form->createElement('checkbox', 'assignsubmission_s3_enabled')],
+            'submissionplugins',
+            '',
+            ' ',
+            false,
+        );
+        $sizeelement = $form->addElement('assignsubmission_s3_size', 'assignsubmission_s3_maxsize');
+        $this->assertFalse($form->elementExists('assignsubmission_s3_enabled'));
+        foreach (['', 0, 20] as $number) {
+            $values = [
+                'assignsubmission_s3_maxsize' => [
+                    'number' => $number,
+                    'unit' => admin_setting_config_size::SIZE_UNIT_GIGABYTE,
+                ],
+            ];
+            foreach ([0, 1] as $enabled) {
+                $form->_submitValues['assignsubmission_s3_enabled'] = $enabled;
+                $expected = $enabled && !$number ? get_string('err_positiveint', 'core_form') : null;
+                $this->assertSame($expected, $sizeelement->validateSubmitValue($values));
+            }
+        }
+        $values['assignsubmission_s3_maxsize']['number'] = '';
+        unset($form->_submitValues['assignsubmission_s3_enabled']);
+        $this->assertNull($sizeelement->validateSubmitValue($values));
+        $form->removeElement('submissionplugins');
+        $this->assertSame(
+            get_string('err_positiveint', 'core_form'),
+            $sizeelement->validateSubmitValue($values),
+        );
     }
 }
