@@ -148,6 +148,55 @@ class assignsubmission_s3 extends persistent {
     }
 
     /**
+     * Get a user's pending records, i.e. stubs whose upload has not been completed yet.
+     *
+     * @param int $assignmentid Assignment course module ID
+     * @param int $userid
+     * @return assignsubmission_s3[]
+     */
+    public static function get_pending_records(int $assignmentid, int $userid): array {
+        return self::get_records([
+            'assignment' => $assignmentid,
+            'submission' => 0,
+            'usermodified' => $userid,
+        ]);
+    }
+
+    /**
+     * Return boolean for if the record has not yet been attached to an assignment submission.
+     *
+     * @return bool
+     */
+    public function is_pending(): bool {
+        return empty($this->get('submission'));
+    }
+
+    /**
+     * Attach a pending record to an assignment submission, moving its stub file to the submission's file area.
+     *
+     * @param int $submissionid The assign_submission ID
+     * @return void
+     */
+    public function attach_to_submission(int $submissionid): void {
+        global $DB;
+
+        $transaction = $DB->start_delegated_transaction();
+
+        $fs = get_file_storage();
+        $fileid = $this->get('fileid');
+        if ($fileid && ($stub = $fs->get_file_by_id($fileid))) {
+            $file = $fs->create_file_from_storedfile(['itemid' => $submissionid], $stub);
+            $this->set('fileid', $file->get_id());
+        }
+        $this->delete_stub_files();
+
+        $this->set('submission', $submissionid);
+        $this->save();
+
+        $transaction->allow_commit();
+    }
+
+    /**
      * Get all records in the requested status.
      *
      * @return assignsubmission_s3[]
@@ -225,12 +274,45 @@ class assignsubmission_s3 extends persistent {
         }
 
         // Delete the stub file.
+        $this->delete_stub_files();
+    }
+
+    /**
+     * Delete this record's stub file and its UUID directory from the current file area item.
+     *
+     * Deletion is scoped to the record's UUID directory, as pending stubs for all users share item ID 0
+     * and a submission may hold several stubs.
+     *
+     * @return void
+     */
+    private function delete_stub_files(): void {
         $fs = get_file_storage();
-        $fs->delete_area_files(
-            $this->get_assign()->get_context()->id,
-            'assignsubmission_s3',
+        $contextid = context_module::instance($this->get('assignment'))->id;
+        $itemid = (int) $this->get('submission');
+        $filepath = '/' . $this->get('uuid') . '/';
+
+        $files = $fs->get_directory_files(
+            $contextid,
+            assign_submission_s3::FILECOMPONENT,
             assign_submission_s3::FILEAREA,
-            $this->get('submission'),
+            $itemid,
+            $filepath,
+            true,
+            true,
         );
+        foreach ($files as $file) {
+            $file->delete();
+        }
+        $directory = $fs->get_file(
+            $contextid,
+            assign_submission_s3::FILECOMPONENT,
+            assign_submission_s3::FILEAREA,
+            $itemid,
+            $filepath,
+            '.',
+        );
+        if ($directory) {
+            $directory->delete();
+        }
     }
 }

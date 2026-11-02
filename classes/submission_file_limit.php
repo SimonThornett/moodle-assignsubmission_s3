@@ -43,14 +43,8 @@ class submission_file_limit {
      * @return string
      */
     public static function validate(int $assignmentid): string {
-        $submission = self::get_current_submission($assignmentid);
-        if (!$submission) {
-            return '';
-        }
-
-        $records = s3_submission::get_records(['submission' => $submission->id]);
         $maxfiles = assign_submission_s3::get_maxfiles($assignmentid);
-        if (count($records) >= $maxfiles) {
+        if (count(self::get_current_records($assignmentid)) >= $maxfiles) {
             return get_string('error:maxfiles', 'assignsubmission_s3', $maxfiles);
         }
 
@@ -58,20 +52,33 @@ class submission_file_limit {
     }
 
     /**
-     * Remove every existing S3 file before the start of a replacement batch.
+     * Remove every existing S3 file, including any pending uploads, before the start of a replacement batch.
      *
      * @param int $assignmentid
      * @return void
      */
     public static function replace_existing_files(int $assignmentid): void {
-        $submission = self::get_current_submission($assignmentid);
-        if (!$submission) {
-            return;
-        }
-
-        foreach (s3_submission::get_records(['submission' => $submission->id]) as $record) {
+        foreach (self::get_current_records($assignmentid) as $record) {
             $record->delete();
         }
+    }
+
+    /**
+     * Get the current user's S3 records, both those attached to their submission and those still pending upload.
+     *
+     * @param int $assignmentid
+     * @return s3_submission[]
+     */
+    private static function get_current_records(int $assignmentid): array {
+        global $USER;
+
+        $records = s3_submission::get_pending_records($assignmentid, $USER->id);
+        $submission = self::get_current_submission($assignmentid);
+        if ($submission) {
+            $records = array_merge($records, s3_submission::get_records(['submission' => $submission->id]));
+        }
+
+        return $records;
     }
 
     /**

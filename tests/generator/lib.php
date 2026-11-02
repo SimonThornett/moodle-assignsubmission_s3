@@ -48,7 +48,10 @@ class assignsubmission_s3_generator extends assignsubmission_subplugin_generator
                 $record->delete();
             }
         }
-        assign_submission_s3::create_submission($assign->get_course_module()->id, $data['filename'], $data['mimetype']);
+        $cmid = $assign->get_course_module()->id;
+        $s3submission = assign_submission_s3::create_submission($cmid, $data['filename'], $data['mimetype']);
+        // Simulate the upload completing, which creates (if required) and attaches the assignment submission.
+        assign_submission_s3::complete_submission($cmid, $s3submission);
 
         if (array_key_exists('groupid', $data)) {
             $submission->groupid = $data['groupid'];

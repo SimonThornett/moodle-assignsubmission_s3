@@ -23,6 +23,7 @@ require_once($CFG->dirroot . '/mod/assign/locallib.php');
 require_once($CFG->dirroot . '/mod/assign/submission/s3/locallib.php');
 
 use assign;
+use assign_submission_s3;
 use assignsubmission_s3\persistent\assignsubmission_s3;
 use assignsubmission_s3\s3;
 use context_module;
@@ -123,22 +124,12 @@ class send_multipart_complete extends external_api {
             ];
         }
 
-        if ($assign->get_instance()->teamsubmission) {
-            $submissionrecord = $assign->get_group_submission($USER->id, 0, false);
-        } else {
-            $submissionrecord = $assign->get_user_submission($USER->id, false);
-        }
-        if (!$submissionrecord) {
-            return [
-                'error' => true,
-                'error_title' => get_string('error'),
-                'error_msg' => get_string('error:request', 'assignsubmission_s3'),
-            ];
-        }
-
+        // The record and stub are pending until the upload has completed.
         $s3submission = assignsubmission_s3::get_record([
-            'submission' => $submissionrecord->id,
+            'assignment' => $cmid,
+            'submission' => 0,
             'fileid' => $fileid,
+            'usermodified' => $USER->id,
         ]);
         if (!$s3submission) {
             return [
@@ -148,18 +139,20 @@ class send_multipart_complete extends external_api {
             ];
         }
 
-        $errorstatus = ['error' => false];
-
         try {
             $s3 = new s3($assign, null);
             $s3->send_presigned_part_upload_complete_request($uploadid, $s3submission->get('uuid'), json_decode($parts, true));
         } catch (Exception $e) {
-            $errorstatus = [
+            return [
                 'error' => true,
                 'error_title' => get_string('error'),
                 'error_msg' => $e->getMessage(),
             ];
         }
-        return $errorstatus;
+
+        // Only now the file is in the bucket do we create the assignment submission (if required) and attach to it.
+        assign_submission_s3::complete_submission($cmid, $s3submission);
+
+        return ['error' => false];
     }
 }

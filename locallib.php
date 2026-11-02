@@ -81,12 +81,13 @@ class assign_submission_s3 extends assign_submission_plugin {
                 $maxfiles,
             ]
         );
+        $filetypes = self::get_filetypes($cmid);
         $mform->addElement(
             'html',
             $OUTPUT->render_from_template(
                 'assignsubmission_s3/form/file',
                 [
-                    'accept' => implode(',', self::get_filetypes($cmid)),
+                    'accept' => empty($filetypes) ? get_string('any') : implode(',', $filetypes),
                     'humansize' => self::get_human_readable_size($maxsize),
                     'maxfiles' => $maxfiles,
                     'multiple' => $maxfiles > 1,
@@ -474,11 +475,11 @@ class assign_submission_s3 extends assign_submission_plugin {
     public function submission_is_empty(stdClass $data): bool {
         global $USER;
 
-        $records = assignsubmission_s3::get_records([
-            'usermodified' => $USER->id,
-            'assignment' => $this->assignment->get_course_module()->id,
-        ]);
-        return empty($records);
+        // Pending records (submission of 0) are uploads that never completed, so don't count.
+        return !assignsubmission_s3::count_records_select(
+            'usermodified = ? AND assignment = ? AND submission <> 0',
+            [$USER->id, $this->assignment->get_course_module()->id],
+        );
     }
 
     /**
@@ -525,7 +526,10 @@ class assign_submission_s3 extends assign_submission_plugin {
     }
 
     /**
-     * Generate the stub file and assignsubmission_s3 record.
+     * Generate the stub file and a pending assignsubmission_s3 record.
+     *
+     * The assignment submission is not created here, as the upload may still fail. Instead the record and stub
+     * are left pending (submission and file item ID of 0) until {@see self::complete_submission()} is called.
      *
      * @param int $assignmentid
      * @param string $filename
@@ -533,24 +537,13 @@ class assign_submission_s3 extends assign_submission_plugin {
      * @return assignsubmission_s3
      */
     public static function create_submission(int $assignmentid, string $filename, string $mimetype): assignsubmission_s3 {
-        global $USER;
-
         $context = context_module::instance($assignmentid);
-        $assignment = new assign($context, null, null);
 
-        // Get the users submission (creating one if one doesn't exist).
-        $instance = $assignment->get_instance();
-
-        if ($instance->teamsubmission) {
-            $submission = $assignment->get_group_submission($USER->id, 0, true);
-        } else {
-            $submission = $assignment->get_user_submission($USER->id, true);
-        }
         $fs = get_file_storage();
         $s3submission = new assignsubmission_s3();
         $s3submission->set_many([
             'assignment' => $assignmentid,
-            'submission' => $submission->id,
+            'submission' => 0,
         ]);
         $s3submission->save();
 
@@ -559,7 +552,7 @@ class assign_submission_s3 extends assign_submission_plugin {
         $filerecord->contextid = $context->id;
         $filerecord->component = self::FILECOMPONENT;
         $filerecord->filearea = self::FILEAREA;
-        $filerecord->itemid = $submission->id;
+        $filerecord->itemid = 0;
         $filerecord->filepath = '/' . $s3submission->get('uuid') . '/';
         $filerecord->filename = $filename;
         $filerecord->mimetype = $mimetype;
@@ -574,6 +567,31 @@ class assign_submission_s3 extends assign_submission_plugin {
         $s3submission->save();
 
         return $s3submission;
+    }
+
+    /**
+     * Attach a pending assignsubmission_s3 record to the user's assignment submission once its upload has completed,
+     * creating the assignment submission if one doesn't exist.
+     *
+     * @param int $assignmentid
+     * @param assignsubmission_s3 $s3submission
+     * @return stdClass The assignment submission
+     */
+    public static function complete_submission(int $assignmentid, assignsubmission_s3 $s3submission): stdClass {
+        global $USER;
+
+        $context = context_module::instance($assignmentid);
+        $assignment = new assign($context, null, null);
+
+        if ($assignment->get_instance()->teamsubmission) {
+            $submission = $assignment->get_group_submission($USER->id, 0, true);
+        } else {
+            $submission = $assignment->get_user_submission($USER->id, true);
+        }
+
+        $s3submission->attach_to_submission($submission->id);
+
+        return $submission;
     }
 
     /**

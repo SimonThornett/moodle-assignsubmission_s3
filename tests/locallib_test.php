@@ -164,25 +164,36 @@ final class locallib_test extends advanced_testcase {
         $this->assertSame('', submission_file_limit::validate($cmid));
         assign_submission_s3::create_submission($cmid, 'first.txt', 'text/plain');
 
+        // Pending uploads count towards the limit, but don't create an assignment submission.
+        $this->assertFalse($assign->get_user_submission($user->id, false));
         $this->assertSame(
             get_string('error:maxfiles', 'assignsubmission_s3', 1),
             submission_file_limit::validate($cmid),
         );
 
         submission_file_limit::replace_existing_files($cmid);
+        $this->assertCount(0, s3_submission::get_pending_records($cmid, $user->id));
         set_config('maxfiles', 2, 'assignsubmission_s3');
         $this->assertSame('', submission_file_limit::validate($cmid));
-        assign_submission_s3::create_submission($cmid, 'second.txt', 'text/plain');
-        assign_submission_s3::create_submission($cmid, 'second.txt', 'text/plain');
-        $submission = $assign->get_user_submission($user->id, false);
+        $first = assign_submission_s3::create_submission($cmid, 'second.txt', 'text/plain');
+        $second = assign_submission_s3::create_submission($cmid, 'second.txt', 'text/plain');
+        $this->assertFalse($assign->get_user_submission($user->id, false));
+        $this->assertSame(
+            get_string('error:maxfiles', 'assignsubmission_s3', 2),
+            submission_file_limit::validate($cmid),
+        );
+        $submission = assign_submission_s3::complete_submission($cmid, $first);
+        assign_submission_s3::complete_submission($cmid, $second);
+        $this->assertEquals($submission->id, $assign->get_user_submission($user->id, false)->id);
+        $this->assertCount(0, s3_submission::get_pending_records($cmid, $user->id));
         $this->assertCount(2, s3_submission::get_records([
             'submission' => $submission->id,
         ]));
-        $this->assertCount(2, get_file_storage()->get_area_files(
+        $this->assertCount(0, get_file_storage()->get_area_files(
             $assign->get_context()->id,
             assign_submission_s3::FILECOMPONENT,
             assign_submission_s3::FILEAREA,
-            $submission->id,
+            0,
             'id',
             false,
         ));
@@ -194,11 +205,15 @@ final class locallib_test extends advanced_testcase {
             'id',
             false,
         ));
+        $this->assertCount(2, $stubfiles);
         $this->assertSame($stubfiles[0]->get_filename(), $stubfiles[1]->get_filename());
         $this->assertNotSame($stubfiles[0]->get_filepath(), $stubfiles[1]->get_filepath());
         $this->assertNotSame($stubfiles[0]->get_id(), $stubfiles[1]->get_id());
         foreach (s3_submission::get_records(['submission' => $submission->id]) as $record) {
-            $this->assertNotFalse(get_file_storage()->get_file_by_id($record->get('fileid')));
+            $file = get_file_storage()->get_file_by_id($record->get('fileid'));
+            $this->assertNotFalse($file);
+            $this->assertEquals($submission->id, $file->get_itemid());
+            $this->assertSame('/' . $record->get('uuid') . '/', $file->get_filepath());
         }
         $plugin = $assign->get_submission_plugin_by_type('s3');
         $this->assertCount(2, $plugin->get_files($submission, new stdClass()));
@@ -210,11 +225,16 @@ final class locallib_test extends advanced_testcase {
             get_string('error:maxfiles', 'assignsubmission_s3', 2),
             submission_file_limit::validate($cmid),
         );
+
+        // Deleting a record only removes its own stub.
         $records = array_values(s3_submission::get_records(['submission' => $submission->id]));
         $firstfileid = $records[0]->get('fileid');
         $secondfileid = $records[1]->get('fileid');
         $records[0]->delete();
         $this->assertFalse(get_file_storage()->get_file_by_id($firstfileid));
+        $this->assertNotFalse(get_file_storage()->get_file_by_id($secondfileid));
+
+        submission_file_limit::replace_existing_files($cmid);
         $this->assertFalse(get_file_storage()->get_file_by_id($secondfileid));
         $this->assertCount(0, get_file_storage()->get_area_files(
             $assign->get_context()->id,
@@ -224,6 +244,84 @@ final class locallib_test extends advanced_testcase {
             'id',
             false,
         ));
+    }
+
+    /**
+     * Failed uploads are left pending and never create an assignment submission.
+     */
+    public function test_pending_upload_does_not_create_submission(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        set_config('maxfiles', 5, 'assignsubmission_s3');
+
+        $course = $this->getDataGenerator()->create_course();
+        $user = $this->getDataGenerator()->create_user();
+        $other = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($user->id, $course->id, 'student');
+        $this->getDataGenerator()->enrol_user($other->id, $course->id, 'student');
+        $assign = $this->create_instance($course);
+        $cmid = $assign->get_course_module()->id;
+        $contextid = $assign->get_context()->id;
+        $plugin = $assign->get_submission_plugin_by_type('s3');
+
+        $this->setUser($other);
+        $otherpending = assign_submission_s3::create_submission($cmid, 'other.txt', 'text/plain');
+
+        $this->setUser($user);
+        $pending = assign_submission_s3::create_submission($cmid, 'failed.txt', 'text/plain');
+
+        $this->assertSame(0, $DB->count_records('assign_submission', ['assignment' => $assign->get_instance()->id]));
+        $this->assertTrue($pending->is_pending());
+        $this->assertCount(1, s3_submission::get_pending_records($cmid, $user->id));
+        $this->assertTrue($plugin->submission_is_empty(new stdClass()));
+        $stub = get_file_storage()->get_file_by_id($pending->get('fileid'));
+        $this->assertEquals(0, $stub->get_itemid());
+        $this->assertSame('failed.txt', $stub->get_filename());
+
+        // A new batch clears this user's stale pending uploads, but not other users'.
+        submission_file_limit::replace_existing_files($cmid);
+        $this->assertFalse(s3_submission::get_record(['id' => $pending->get('id')]));
+        $this->assertFalse(get_file_storage()->get_file_by_id($pending->get('fileid')));
+        $this->assertNotFalse(s3_submission::get_record(['id' => $otherpending->get('id')]));
+        $this->assertNotFalse(get_file_storage()->get_file_by_id($otherpending->get('fileid')));
+
+        // Completing the upload creates the submission.
+        $completed = assign_submission_s3::create_submission($cmid, 'completed.txt', 'text/plain');
+        $submission = assign_submission_s3::complete_submission($cmid, $completed);
+        $completed->read();
+        $this->assertFalse($completed->is_pending());
+        $this->assertEquals($submission->id, $completed->get('submission'));
+        $this->assertEquals($user->id, $submission->userid);
+        $this->assertSame(1, $DB->count_records('assign_submission', ['assignment' => $assign->get_instance()->id]));
+        $this->assertFalse($plugin->submission_is_empty(new stdClass()));
+        $this->assertNotFalse(get_file_storage()->get_file_by_id($otherpending->get('fileid')));
+    }
+
+    /**
+     * Completing an upload for a team assignment attaches it to the group submission.
+     */
+    public function test_complete_submission_team(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $course = $this->getDataGenerator()->create_course();
+        $user = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($user->id, $course->id, 'student');
+        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
+        $this->getDataGenerator()->create_group_member(['groupid' => $group->id, 'userid' => $user->id]);
+        $assign = $this->create_instance($course, ['teamsubmission' => 1]);
+        $cmid = $assign->get_course_module()->id;
+
+        $this->setUser($user);
+        $pending = assign_submission_s3::create_submission($cmid, 'team.txt', 'text/plain');
+        $this->assertFalse($assign->get_group_submission($user->id, 0, false));
+
+        $submission = assign_submission_s3::complete_submission($cmid, $pending);
+        $this->assertEquals($group->id, $submission->groupid);
+        $this->assertEquals($submission->id, $assign->get_group_submission($user->id, 0, false)->id);
+        $this->assertEquals($submission->id, s3_submission::get_record(['id' => $pending->get('id')])->get('submission'));
     }
 
     /**
